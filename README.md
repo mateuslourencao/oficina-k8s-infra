@@ -6,28 +6,6 @@ Infraestrutura como código do ambiente Kubernetes local da Oficina, provisionad
 
 ## Arquitetura
 
-```mermaid
-flowchart TB
-    DEV[Desenvolvedor] -->|terraform apply| TF[Terraform]
-    TF -->|tehcyx/kind| KIND[Cluster Kind oficina-local]
-    TF -->|Docker build + kind load| IMG[Imagem local da API]
-    TF -->|Metrics Server| MS[Metrics Server]
-    TF -->|kubectl apply -k| CLUSTER
-    subgraph CLUSTER[Kubernetes]
-      API[API: 3 réplicas]
-      HPA[HPA: 3–10 réplicas]
-      DB[MySQL 8 + PVC 2 GiB]
-      MAIL[MailHog]
-      API --> DB
-      API --> MAIL
-      HPA -. CPU 70% / memória 80% .-> API
-    end
-    KIND --> CLUSTER
-    IMG --> API
-    DEV -->|localhost:8081| API
-    DEV -->|localhost:8025| MAIL
-```
-
 O Terraform cria o cluster `oficina-local`, mapeia as portas de acesso, constrói e carrega a imagem da aplicação, instala o Metrics Server e aplica os recursos Kubernetes com Kustomize. O HPA usa métricas de CPU e memória para escalar a API. O Metrics Server configura `--kubelet-insecure-tls`, necessário para o certificado do kubelet no Kind.
 
 Os manifests, o `kustomization.yaml`, o `schema.sql`, o Dockerfile e o código-fonte da API são mantidos no repositório da aplicação. O Terraform usa esses arquivos para construir e implantar a versão local da API.
@@ -176,6 +154,10 @@ Os manifests atuais da aplicação incluem credenciais destinadas somente ao amb
 
 ## CI/CD e próximos passos
 
-Este repositório ainda não tem workflow de CI/CD. O workflow no repositório da aplicação valida testes, SonarCloud, build e implantação em um cluster Kind temporário; ele não publica imagem nem faz deploy contínuo deste repositório de infraestrutura.
+O workflow `.github/workflows/main.yml` deste repositório roda em Pull Requests, em pushes para `commit-inicial`, `main` ou `master` quando há mudanças em `infra/`, e também pode ser iniciado manualmente. Ele verifica a formatação, inicializa os providers sem backend remoto, valida a configuração e gera um `terraform plan`. O plano é somente uma verificação: não executa `apply` nem cria um cluster.
 
-Para atender ao desenho corporativo do Tech Challenge, ainda será necessário adicionar pipeline de Terraform, proteção de branches e PRs, backend remoto e estratégia de deploy para nuvem. O ambiente atual é uma base local de desenvolvimento, não um ambiente de produção.
+Como o plano calcula fingerprints dos fontes e manifests da aplicação, o workflow também faz checkout de `soat-fase1-tech-challenge` na branch `main`. Se esse repositório for privado, configure o secret `APP_REPOSITORY_READ_TOKEN` neste repositório com permissão de leitura de conteúdo no repositório da aplicação. Para um repositório público, o token padrão do workflow pode ser suficiente.
+
+O workflow no repositório da aplicação permanece responsável pelos testes Maven, análise SonarCloud, build da imagem e implantação de validação em um cluster Kind temporário. Ele não publica uma imagem nem faz deploy contínuo em ambiente persistente.
+
+O `apply` automatizado ainda não foi habilitado: a infraestrutura provisiona Kind local e seus provisioners usam PowerShell. Para o desenho corporativo do Tech Challenge ainda serão necessários um provider de nuvem, backend remoto, estratégia de deploy, proteção de branches e regras de aprovação para produção.
