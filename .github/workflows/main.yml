@@ -85,7 +85,7 @@ jobs:
         env:
           TF_VAR_application_path: ${{ github.workspace }}/soat-fase1-tech-challenge
         run: |
-          terraform -chdir=infra init -backend=false -input=false
+          terraform -chdir=infra init -input=false -backend-config="path=$RUNNER_TEMP/terraform-plan.tfstate"
           terraform -chdir=infra plan -input=false -lock=false -no-color
 
   deploy:
