@@ -9,3 +9,15 @@ variable "application_path" {
   type        = string
   default     = ""
 }
+
+variable "api_host_port" {
+  description = "Porta local para acessar a API publicada pelo cluster Kind."
+  type        = number
+  default     = 8081
+}
+
+variable "mailhog_host_port" {
+  description = "Porta local para acessar o MailHog publicado pelo cluster Kind."
+  type        = number
+  default     = 8025
+}

@@ -1,4 +1,4 @@
-name: Terraform CI
+name: Local Kubernetes CI/CD
 
 on:
   pull_request:
@@ -8,21 +8,35 @@ on:
       - 'infra/**'
   push:
     branches:
-      - commit-inicial
+      - homolog
       - main
-      - master
     paths:
       - '.github/workflows/main.yml'
       - '.gitignore'
       - 'infra/**'
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Local target environment
+        required: true
+        type: choice
+        options:
+          - homolog
+          - production
+      application_ref:
+        description: Application branch to deploy (must match the target branch)
+        required: true
+        type: choice
+        options:
+          - homolog
+          - main
 
 permissions:
   contents: read
 
 jobs:
-  terraform:
-    name: Format, validate and plan
+  validate:
+    name: Format and validate Terraform
     runs-on: ubuntu-latest
     steps:
       - name: Checkout infrastructure repository
@@ -43,19 +57,108 @@ jobs:
       - name: Validate Terraform configuration
         run: terraform -chdir=infra validate
 
+  plan:
+    name: Plan infrastructure changes
+    if: github.event_name == 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout infrastructure repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
       - name: Checkout application sources and Kubernetes manifests
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: mateuslourencao/soat-fase1-tech-challenge
-          ref: main
+          ref: ${{ github.base_ref || 'main' }}
           path: soat-fase1-tech-challenge
           token: ${{ secrets.APP_REPOSITORY_READ_TOKEN || github.token }}
           persist-credentials: false
 
-      - name: Create Terraform plan
-        run: >-
-          terraform -chdir=infra plan
-          -input=false
-          -lock=false
-          -no-color
-          -var="application_path=${GITHUB_WORKSPACE}/soat-fase1-tech-challenge"
+      - name: Initialize and plan without changing the local cluster
+        env:
+          TF_VAR_application_path: ${{ github.workspace }}/soat-fase1-tech-challenge
+        run: |
+          terraform -chdir=infra init -backend=false -input=false
+          terraform -chdir=infra plan -input=false -lock=false -no-color
+
+  deploy:
+    name: Deploy to local ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'production' || 'homolog') }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && contains(fromJSON('["homolog", "main"]'), github.ref_name))
+    needs: validate
+    runs-on: [self-hosted, windows, x64, oficina-local]
+    timeout-minutes: 45
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'production' || 'homolog') }}
+    concurrency:
+      group: local-deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.ref_name }}
+      cancel-in-progress: false
+    env:
+      TARGET_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'production' || 'homolog') }}
+      APPLICATION_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.application_ref || github.ref_name }}
+    steps:
+      - name: Checkout infrastructure repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - name: Check environment and prepare persistent local state
+        shell: pwsh
+        run: |
+          $expectedRef = if ($env:TARGET_ENV -eq 'production') { 'main' } else { 'homolog' }
+          if ($env:GITHUB_REF_NAME -ne $expectedRef -or $env:APPLICATION_REF -ne $expectedRef) {
+            throw "Environment '$env:TARGET_ENV' requires both repositories to use branch '$expectedRef'."
+          }
+
+          $stateDirectory = Join-Path $env:USERPROFILE '.terraform-state\oficina-k8s-infra'
+          New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
+          $stateFileName = "$($env:TARGET_ENV).tfstate"
+          $statePath = Join-Path $stateDirectory $stateFileName
+
+          $clusterName = if ($env:TARGET_ENV -eq 'production') { 'oficina-prod' } else { 'oficina-homolog' }
+          $apiPort = if ($env:TARGET_ENV -eq 'production') { '8081' } else { '8082' }
+          $mailhogPort = if ($env:TARGET_ENV -eq 'production') { '8025' } else { '8026' }
+          $applicationPath = Join-Path $env:GITHUB_WORKSPACE 'soat-fase1-tech-challenge'
+
+          $environmentLines = @(
+            "TF_STATE_PATH=$statePath",
+            "TF_VAR_cluster_name=$clusterName",
+            "TF_VAR_api_host_port=$apiPort",
+            "TF_VAR_mailhog_host_port=$mailhogPort",
+            "TF_VAR_application_path=$applicationPath"
+          ) -join "`n"
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "$environmentLines`n", [System.Text.UTF8Encoding]::new($false))
+
+      - name: Checkout matching application branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: mateuslourencao/soat-fase1-tech-challenge
+          ref: ${{ env.APPLICATION_REF }}
+          path: soat-fase1-tech-challenge
+          token: ${{ secrets.APP_REPOSITORY_READ_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Initialize persistent environment state
+        shell: pwsh
+        run: terraform -chdir=infra init -input=false "-backend-config=path=$env:TF_STATE_PATH"
+
+      - name: Apply infrastructure and deploy application
+        shell: pwsh
+        run: terraform -chdir=infra apply -auto-approve -input=false
+
+      - name: Show local deployment URLs
+        if: success()
+        shell: pwsh
+        run: terraform -chdir=infra output

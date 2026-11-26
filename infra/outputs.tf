@@ -5,10 +5,10 @@ output "cluster_name" {
 
 output "api_url" {
   description = "URL local da API."
-  value       = "http://localhost:8081"
+  value       = "http://localhost:${var.api_host_port}"
 }
 
 output "mailhog_url" {
   description = "URL local da interface do MailHog."
-  value       = "http://localhost:8025"
+  value       = "http://localhost:${var.mailhog_host_port}"
 }
