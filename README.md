@@ -15,6 +15,9 @@ Os manifests, o `kustomization.yaml`, o `schema.sql`, o Dockerfile e o código-f
 ```text
 .
 ├── .gitignore
+├── .github/
+│   └── workflows/
+│       └── main.yml
 ├── README.md
 └── infra/
   ├── .terraform.lock.hcl
@@ -25,7 +28,7 @@ Os manifests, o `kustomization.yaml`, o `schema.sql`, o Dockerfile e o código-f
 ```
 
 - `main.tf`: define o cluster Kind, a construção/carregamento da imagem, a instalação do Metrics Server e a aplicação dos manifests.
-- `variables.tf`: configura o nome do cluster e o caminho do checkout da aplicação.
+- `variables.tf`: configura o nome do cluster, as portas locais e o caminho do checkout da aplicação.
 - `outputs.tf`: informa o nome do cluster e URLs locais da API e do MailHog.
 - `versions.tf` e `.terraform.lock.hcl`: fixam os requisitos e a versão do provider Kind.
 - `.gitignore`: evita versionar estado, cache, planos e variáveis locais do Terraform.
@@ -84,6 +87,8 @@ terraform -chdir=infra validate
 terraform -chdir=infra plan
 terraform -chdir=infra apply
 ```
+
+Se já existir estado local criado antes da configuração do backend local, migre-o uma vez com `terraform -chdir=infra init -migrate-state`.
 
 Se os repositórios não estiverem lado a lado, acrescente `-var="application_path=C:/caminho/soat-fase1-tech-challenge"` a `plan` e `apply`.
 
@@ -148,16 +153,30 @@ A confirmação do Terraform é solicitada antes da remoção. Isso exclui o clu
 
 ## Estado e segurança
 
-O backend remoto do Terraform ainda não está configurado; o estado fica local em `infra/terraform.tfstate`. O `.gitignore` exclui o estado e seus backups, cache `.terraform/`, planos e arquivos `.tfvars`. Não remova essas proteções nem versione estado, credenciais ou configurações da máquina. O arquivo `.terraform.lock.hcl` deve ser mantido para fixar o provider.
+O estado local de execução manual fica em `infra/terraform.tfstate`. O deploy do GitHub Actions grava estados separados e persistentes fora do checkout do repositório, em `%USERPROFILE%\.terraform-state\oficina-k8s-infra\homolog.tfstate` e `production.tfstate`. O `.gitignore` exclui estado, backups, cache `.terraform/`, planos e arquivos `.tfvars`. Não remova essas proteções nem versione estado, credenciais ou configurações da máquina. O arquivo `.terraform.lock.hcl` deve ser mantido para fixar o provider.
 
 Os manifests atuais da aplicação incluem credenciais destinadas somente ao ambiente local. Não reutilize esses valores em ambientes compartilhados ou produção; use um gerenciador de segredos e configure credenciais fora do Git.
 
-## CI/CD e próximos passos
+## CI/CD e deploy automático local
 
-O workflow `.github/workflows/main.yml` deste repositório roda em Pull Requests, em pushes para `commit-inicial`, `main` ou `master` quando há mudanças em `infra/`, e também pode ser iniciado manualmente. Ele verifica a formatação, inicializa os providers sem backend remoto, valida a configuração e gera um `terraform plan`. O plano é somente uma verificação: não executa `apply` nem cria um cluster.
+O workflow `.github/workflows/main.yml` valida o Terraform em Pull Requests e gera um `plan` sem aplicar mudanças. Em pushes para `homolog` ou `main`, executa `terraform apply` num runner Windows self-hosted conectado à máquina local:
 
-Como o plano calcula fingerprints dos fontes e manifests da aplicação, o workflow também faz checkout de `soat-fase1-tech-challenge` na branch `main`. Se esse repositório for privado, configure o secret `APP_REPOSITORY_READ_TOKEN` neste repositório com permissão de leitura de conteúdo no repositório da aplicação. Para um repositório público, o token padrão do workflow pode ser suficiente.
+| Branch | Ambiente local | Cluster Kind | API | MailHog |
+|---|---|---|---|---|
+| `homolog` | Homologação | `oficina-homolog` | `http://localhost:8082` | `http://localhost:8026` |
+| `main` | Produção local | `oficina-prod` | `http://localhost:8081` | `http://localhost:8025` |
 
-O workflow no repositório da aplicação permanece responsável pelos testes Maven, análise SonarCloud, build da imagem e implantação de validação em um cluster Kind temporário. Ele não publica uma imagem nem faz deploy contínuo em ambiente persistente.
+O repositório da aplicação continua responsável pelos testes Maven e SonarCloud. Em PRs, ele valida os manifests num cluster Kind temporário. Após testes e Sonar aprovados num push para `homolog` ou `main`, dispara este workflow para construir a imagem e implantá-la no cluster local correspondente. A infraestrutura também é aplicada quando há mudanças Terraform nessas branches.
 
-O `apply` automatizado ainda não foi habilitado: a infraestrutura provisiona Kind local e seus provisioners usam PowerShell. Para o desenho corporativo do Tech Challenge ainda serão necessários um provider de nuvem, backend remoto, estratégia de deploy, proteção de branches e regras de aprovação para produção.
+### Preparar o deploy local
+
+1. Crie as branches `homolog` e `main` nos dois repositórios. Mantenha o workflow de infraestrutura disponível em ambas.
+2. Registre um runner self-hosted Windows no repositório `oficina-k8s-infra` com o rótulo adicional `oficina-local`. Ele deve usar a mesma conta Windows que tem acesso ao Docker Desktop.
+3. Mantenha Docker Desktop em execução e instale Terraform, Kind, `kubectl` e PowerShell nessa máquina.
+4. Se o repositório da aplicação for privado, configure `APP_REPOSITORY_READ_TOKEN` nos secrets do repositório de infraestrutura, com leitura de conteúdo.
+5. Configure `INFRA_DEPLOY_TOKEN` nos secrets do repositório da aplicação. Use um fine-grained token limitado a `oficina-k8s-infra` com permissão **Actions: write**, para disparar o workflow de deploy.
+6. Ative proteção de branch e PRs nas configurações do GitHub. `main` deve exigir PR; não permita commits diretos.
+
+O deploy manual via `workflow_dispatch` também está disponível. Escolha o ambiente e rode o workflow na branch correspondente (`homolog` para homologação local ou `main` para produção local).
+
+> **Limite do ambiente:** “produção” aqui é apenas um segundo cluster Kind na máquina local. Ele não oferece alta disponibilidade real, acesso público ou continuidade quando a máquina está desligada. Isso ainda não satisfaz o requisito de produção em nuvem do Tech Challenge.

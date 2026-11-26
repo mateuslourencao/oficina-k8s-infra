@@ -37,13 +37,13 @@ resource "kind_cluster" "oficina" {
 
       extra_port_mappings {
         container_port = 30081
-        host_port      = 8081
+        host_port      = var.api_host_port
         protocol       = "TCP"
       }
 
       extra_port_mappings {
         container_port = 30025
-        host_port      = 8025
+        host_port      = var.mailhog_host_port
         protocol       = "TCP"
       }
     }
