@@ -1,0 +1,8 @@
+# Arquivos locais e estado Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+oficina-local-config
