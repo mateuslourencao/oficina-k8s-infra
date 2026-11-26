@@ -1,0 +1,61 @@
+name: Terraform CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/main.yml'
+      - '.gitignore'
+      - 'infra/**'
+  push:
+    branches:
+      - commit-inicial
+      - main
+      - master
+    paths:
+      - '.github/workflows/main.yml'
+      - '.gitignore'
+      - 'infra/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: Format, validate and plan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout infrastructure repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive infra
+
+      - name: Initialize Terraform without a remote backend
+        run: terraform -chdir=infra init -backend=false -input=false
+
+      - name: Validate Terraform configuration
+        run: terraform -chdir=infra validate
+
+      - name: Checkout application sources and Kubernetes manifests
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: mateuslourencao/soat-fase1-tech-challenge
+          ref: main
+          path: soat-fase1-tech-challenge
+          token: ${{ secrets.APP_REPOSITORY_READ_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Create Terraform plan
+        run: >-
+          terraform -chdir=infra plan
+          -input=false
+          -lock=false
+          -no-color
+          -var="application_path=${GITHUB_WORKSPACE}/soat-fase1-tech-challenge"
