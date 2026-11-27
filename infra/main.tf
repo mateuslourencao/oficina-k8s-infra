@@ -2,7 +2,6 @@ locals {
   image_name = "soat-fase1-tech-challenge-app:dev"
 
   project_root = var.application_path == "" ? abspath("${path.module}/../../soat-fase1-tech-challenge") : abspath(var.application_path)
-
   image_source_files = concat(
     [
       "${local.project_root}/Dockerfile",
@@ -14,7 +13,6 @@ locals {
   manifest_source_files = concat(
     [
       "${local.project_root}/kustomization.yaml",
-      "${local.project_root}/schema.sql",
       "${local.project_root}/scripts/install-metrics-server.ps1",
     ],
     [for file in fileset(local.project_root, "k8s/**") : "${local.project_root}/${file}"],
@@ -90,6 +88,6 @@ resource "terraform_data" "deploy_kustomization" {
   provisioner "local-exec" {
     working_dir = local.project_root
     interpreter = ["PowerShell", "-NoProfile", "-NonInteractive", "-Command"]
-    command     = "kubectl --context kind-${var.cluster_name} apply -k .; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; kubectl --context kind-${var.cluster_name} rollout status deployment/oficina-db --timeout=180s; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; kubectl --context kind-${var.cluster_name} rollout status deployment/oficina-api --timeout=240s; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; kubectl --context kind-${var.cluster_name} rollout status deployment/mailhog --timeout=120s; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"
+    command     = "kubectl --context kind-${var.cluster_name} rollout status deployment/oficina-db --timeout=180s; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; kubectl --context kind-${var.cluster_name} apply -k .; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; kubectl --context kind-${var.cluster_name} rollout status deployment/oficina-api --timeout=240s; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; kubectl --context kind-${var.cluster_name} rollout status deployment/mailhog --timeout=120s; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"
   }
 }
