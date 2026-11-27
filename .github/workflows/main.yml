@@ -131,7 +131,6 @@ jobs:
           $apiPort = if ($env:TARGET_ENV -eq 'production') { '8081' } else { '8082' }
           $mailhogPort = if ($env:TARGET_ENV -eq 'production') { '8025' } else { '8026' }
           $applicationPath = Join-Path $env:GITHUB_WORKSPACE 'soat-fase1-tech-challenge'
-
           $environmentLines = @(
             "TF_STATE_PATH=$statePath",
             "TF_VAR_cluster_name=$clusterName",
@@ -150,11 +149,37 @@ jobs:
           token: ${{ secrets.APP_REPOSITORY_READ_TOKEN || github.token }}
           persist-credentials: false
 
+      - name: Checkout matching database branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: mateuslourencao/oficina-db
+          ref: ${{ env.APPLICATION_REF }}
+          path: oficina-db
+          token: ${{ secrets.DB_REPOSITORY_READ_TOKEN || github.token }}
+          persist-credentials: false
+
       - name: Initialize persistent environment state
         shell: pwsh
         run: terraform -chdir=infra init -input=false "-backend-config=path=$env:TF_STATE_PATH"
 
-      - name: Apply infrastructure and deploy application
+      - name: Create cluster and prepare application image
+        shell: pwsh
+        run: terraform -chdir=infra apply -auto-approve -input=false -target=kind_cluster.oficina -target=terraform_data.install_metrics_server
+
+      - name: Apply database Terraform before the application
+        shell: pwsh
+        run: |
+          $stateDirectory = Join-Path $env:USERPROFILE '.terraform-state\oficina-db'
+          New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
+          $databaseState = Join-Path $stateDirectory "$($env:TARGET_ENV).tfstate"
+          $clusterName = if ($env:TARGET_ENV -eq 'production') { 'oficina-prod' } else { 'oficina-homolog' }
+          $env:TF_VAR_cluster_context = "kind-$clusterName"
+          terraform -chdir=oficina-db/terraform init -input=false "-backend-config=path=$databaseState"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          terraform -chdir=oficina-db/terraform apply -auto-approve -input=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Apply application manifests after database is ready
         shell: pwsh
         run: terraform -chdir=infra apply -auto-approve -input=false
 
